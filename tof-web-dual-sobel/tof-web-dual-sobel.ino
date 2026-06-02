@@ -328,9 +328,14 @@ void setup() {
 
   delay(500);
 
+  // --- Wi-Fi Connection & AP Fallback ---
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
+  
+  unsigned long startAttemptTime = millis();
+  
+  // Keep trying until connected OR 10 seconds have passed
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
     statusLED.setPixelColor(0, statusLED.Color(sensor1fault * 255, 255, sensor2fault * 255));
     statusLED.show();
     delay(250);
@@ -340,11 +345,40 @@ void setup() {
     statusLED.show();
     delay(250);
   }
-  Serial.println("\nIP Address: " + WiFi.localIP().toString());
 
-  statusLED.setPixelColor(0, statusLED.Color(sensor1fault * 255, 0, sensor2fault * 255));
-  statusLED.show();
+  // Check if we successfully connected or if we timed out
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nConnected! IP Address: " + WiFi.localIP().toString());
+    
+    // Set to solid base fault color
+    statusLED.setPixelColor(0, statusLED.Color(sensor1fault * 255, 0, sensor2fault * 255));
+    statusLED.show();
+  } else {
+    Serial.println("\nWiFi Failed! Starting Access Point...");
+    
+    // Switch to AP mode and broadcast a network called "NavAid-Config"
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP("NavAid-Config"); 
+    // Note: To add a password, use WiFi.softAP("NavAid-Config", "yourpassword");
+    
+    Serial.println("AP IP Address: " + WiFi.softAPIP().toString()); // Usually defaults to 192.168.4.1
 
+    // Flash white rapidly 3 times to visually signal AP mode entered
+    for(int i = 0; i < 3; i++) {
+       statusLED.setPixelColor(0, statusLED.Color(255, 255, 255));
+       statusLED.show();
+       delay(100);
+       statusLED.setPixelColor(0, statusLED.Color(0, 0, 0));
+       statusLED.show();
+       delay(100);
+    }
+    
+    // Return to the base fault diagnostic color
+    statusLED.setPixelColor(0, statusLED.Color(sensor1fault * 255, 0, sensor2fault * 255));
+    statusLED.show();
+  }
+
+  // --- Start Web Server (Works for both STA and AP mode) ---
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/html", index_html);
   });
