@@ -64,8 +64,8 @@ const char index_html[] PROGMEM = R"rawliteral(
   <title>Dual ToF + IMU Dashboard</title>
   <style>
     body { font-family: Arial; background-color: #121212; color: white; text-align: center; margin: 0; padding: 20px; box-sizing: border-box; overflow-x: hidden; }
-    #controls { margin-bottom: 20px; }
-    button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 5px; }
+    #controls { margin-bottom: 20px; display: flex; justify-content: center; gap: 15px; }
+    button { padding: 10px 20px; font-size: 14px; cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 5px; font-weight: bold; transition: background-color 0.2s; }
     button:hover { background-color: #45a049; }
     
     .imu-banner { background-color: #222; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 18px; font-weight: bold; border: 1px solid #444; }
@@ -90,7 +90,7 @@ const char index_html[] PROGMEM = R"rawliteral(
       color: #fff; 
       font-weight: bold; 
       border-radius: 4px;
-      font-size: 11px;
+      font-size: 10px;
       box-sizing: border-box;
       transition: border 0.1s;
       border: 2px solid transparent; 
@@ -98,8 +98,8 @@ const char index_html[] PROGMEM = R"rawliteral(
       line-height: 1.1;
       padding: 1px;
     }
-    .status { font-size: 9px; color: #ddd; margin-top: 2px; font-weight: normal; }
-    .sobel { font-size: 11px; font-weight: bold; margin-top: 2px; }
+    .status { font-size: 8px; color: #ddd; margin-top: 2px; font-weight: normal; }
+    .sobel { font-size: 10px; font-weight: bold; margin-top: 2px; }
     
     .edge-climb { border-color: #2196F3; } 
     .edge-drop  { border-color: #f44336; } 
@@ -116,6 +116,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 
   <div id="controls">
     <button id="resBtn" onclick="toggleResolution()">Switch to 4x4 Mode</button>
+    <button id="decompBtn" onclick="toggleDecomp()">Enable Roll Decomposition</button>
   </div>
   
   <div class="dashboard">
@@ -135,6 +136,8 @@ const char index_html[] PROGMEM = R"rawliteral(
     let cells1 = [];
     let cells2 = [];
     let currentRes = 0;
+    
+    let isDecompEnabled = false;
 
     var gateway = `ws://${window.location.hostname}/ws`;
     var websocket = new WebSocket(gateway);
@@ -146,6 +149,18 @@ const char index_html[] PROGMEM = R"rawliteral(
       } else {
         websocket.send("RES:8");
         document.getElementById('resBtn').innerText = "Switching...";
+      }
+    }
+    
+    function toggleDecomp() {
+      isDecompEnabled = !isDecompEnabled;
+      let btn = document.getElementById('decompBtn');
+      if (isDecompEnabled) {
+        btn.innerText = "Disable Roll Decomposition";
+        btn.style.backgroundColor = "#2196F3"; // Highlight Blue when active
+      } else {
+        btn.innerText = "Enable Roll Decomposition";
+        btn.style.backgroundColor = "#4CAF50"; // Return to Green
       }
     }
 
@@ -161,13 +176,13 @@ const char index_html[] PROGMEM = R"rawliteral(
       }
     }
 
-    function updateGridData(cellArray, dataString) {
+    // Now accepts isLeftSensor boolean and the current roll angle
+    function updateGridData(cellArray, dataString, isLeftSensor, rollAngle) {
       if (!dataString) return;
       let pairs = dataString.split(',');
       let res = Math.sqrt(pairs.length);
 
       for (let i = 0; i < pairs.length; i++) {
-        // Horizontal Flip Math
         let y = Math.floor(i / res);
         let x = i % res;
         let flippedX = (res - 1) - x;
@@ -189,7 +204,24 @@ const char index_html[] PROGMEM = R"rawliteral(
           targetCell.innerHTML = `- <br><span class="status">S:${stat}</span>`;
         } else {
           targetCell.style.backgroundColor = `hsl(${hue}, 100%, 35%)`;
-          targetCell.innerHTML = `${dist} <br><span class="status">S:${stat}</span>`;
+          
+          // --- MATH: Apply Vector Decomposition ---
+          let displayStr = `${dist}`;
+          if (isDecompEnabled && isLeftSensor) {
+            
+            // Apply the -45 degree physical mounting offset
+            let effectiveRoll = rollAngle - 45.0; 
+            
+            // Convert to radians and do the trig
+            let rollRad = effectiveRoll * (Math.PI / 180);
+            let compX = Math.round(dist * Math.cos(rollRad));
+            let compY = Math.round(dist * Math.sin(rollRad));
+            
+            displayStr = `X:${compX}<br>Y:${compY}`;
+          }
+          // ----------------------------------------
+
+          targetCell.innerHTML = `${displayStr} <br><span class="status">S:${stat}</span>`;
           
           if (sobelClass === 1) {
             targetCell.className = 'cell edge-climb';
@@ -204,13 +236,22 @@ const char index_html[] PROGMEM = R"rawliteral(
       }
     }
 
-    websocket.onmessage = function(event) {
+websocket.onmessage = function(event) {
       let sensorData = event.data.split('|');
+      let currentRollDeg = 0;
       
-      // Update IMU if available
+      // Extract IMU data
       if (sensorData.length === 3) {
         let imuParts = sensorData[2].split(',');
-        document.getElementById('roll').innerText = parseFloat(imuParts[0]).toFixed(1) + '°';
+        let rawRoll = parseFloat(imuParts[0]);
+        
+        // --- IMU ORIENTATION CORRECTION ---
+        // Neutral reads -90, and the physical axis is inverted.
+        currentRollDeg = -(rawRoll + 90.0);
+        // ----------------------------------
+
+        // Update the dashboard banner with the corrected roll
+        document.getElementById('roll').innerText = currentRollDeg.toFixed(1) + '°';
         document.getElementById('pitch').innerText = parseFloat(imuParts[1]).toFixed(1) + '°';
         document.getElementById('yaw').innerText = parseFloat(imuParts[2]).toFixed(1) + '°';
       }
@@ -225,8 +266,9 @@ const char index_html[] PROGMEM = R"rawliteral(
         document.getElementById('resBtn').innerText = `Switch to ${currentRes === 8 ? '4x4' : '8x8'} Mode`;
       }
 
-      updateGridData(cells1, sensorData[0]);
-      updateGridData(cells2, sensorData[1]);
+      // Pass the specific flags and the CORRECTED roll angle down to the UI renderer
+      updateGridData(cells1, sensorData[0], true, currentRollDeg);
+      updateGridData(cells2, sensorData[1], false, currentRollDeg);
     };
   </script>
 </body>
